@@ -80,6 +80,13 @@ namespace Microsoft.Identity.Web.Resource
             // we could get the issuer data from metadata and ignore that one (if templated, as would be expected in a multitenant app)
             // but we'd pay that tax the first time, then store them in the AadIssuerVx properties
 
+            // alternatively, we could build a valid issuer list and store that in a property
+            // assuming the logic is
+            // if ValidIssuers is set (excluding templated {tenantid} values from metadata), take those
+            // if ValidIssuer is set, add to the Valid list (I believe this is what the aspnet OpenIdConnect internals do anyway)
+            // if neither is set, use metadata discovery
+            // then plow through the new valid issuer list
+
             SetIssuerPropertiesFromMetadata(securityToken);
 
             bool userDefinedExplicitIssuers = false;
