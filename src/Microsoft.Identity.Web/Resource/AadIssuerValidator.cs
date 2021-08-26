@@ -4,6 +4,7 @@
 using System;
 using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
+using System.Linq;
 using System.Net.Http;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web.InstanceDiscovery;
@@ -74,9 +75,26 @@ namespace Microsoft.Identity.Web.Resource
                 throw new SecurityTokenInvalidIssuerException(IDWebErrorMessage.TenantIdClaimNotPresentInToken);
             }
 
+            // if the user provides an explicit list of valid issuer(s), <assumption> we should use only their list
+            // and skip any metadata discovery of issuer
+            // we could get the issuer data from metadata and ignore that one (if templated, as would be expected in a multitenant app)
+            // but we'd pay that tax the first time, then store them in the AadIssuerVx properties
+
+            SetIssuerPropertiesFromMetadata(securityToken);
+
+            bool userDefinedExplicitIssuers = false;
+
             if (validationParameters.ValidIssuers != null)
             {
-                foreach (var validIssuerTemplate in validationParameters.ValidIssuers)
+                var explicitIssuers = validationParameters.ValidIssuers.Where(x =>
+                               !string.Equals(x, AadIssuerV1 ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                               !string.Equals(x, AadIssuerV2 ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+
+                userDefinedExplicitIssuers = explicitIssuers != null && explicitIssuers.Any();
+
+                var validIssuers = userDefinedExplicitIssuers ? explicitIssuers.ToList() : validationParameters.ValidIssuers;
+
+                foreach (var validIssuerTemplate in validIssuers)
                 {
                     if (IsValidIssuer(validIssuerTemplate, tenantId, actualIssuer))
                     {
@@ -87,6 +105,7 @@ namespace Microsoft.Identity.Web.Resource
 
             if (validationParameters.ValidIssuer != null)
             {
+                userDefinedExplicitIssuers = true;
                 if (IsValidIssuer(validationParameters.ValidIssuer, tenantId, actualIssuer))
                 {
                     return actualIssuer;
@@ -95,27 +114,11 @@ namespace Microsoft.Identity.Web.Resource
 
             try
             {
-                if (securityToken.Issuer.EndsWith("v2.0", StringComparison.OrdinalIgnoreCase))
+                if (!userDefinedExplicitIssuers)
                 {
-                    if (AadIssuerV2 == null)
-                    {
-                        IssuerMetadata issuerMetadata =
-                            CreateConfigManager(AadAuthority).GetConfigurationAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-                        AadIssuerV2 = issuerMetadata.Issuer!;
-                    }
-
                     if (IsValidIssuer(AadIssuerV2, tenantId, actualIssuer))
                     {
                         return actualIssuer;
-                    }
-                }
-                else
-                {
-                    if (AadIssuerV1 == null)
-                    {
-                        IssuerMetadata issuerMetadata =
-                            CreateConfigManager(CreateV1Authority()).GetConfigurationAsync().ConfigureAwait(false).GetAwaiter().GetResult();
-                        AadIssuerV1 = issuerMetadata.Issuer!;
                     }
 
                     if (IsValidIssuer(AadIssuerV1, tenantId, actualIssuer))
@@ -257,6 +260,28 @@ namespace Microsoft.Identity.Web.Resource
             }
 
             return string.Empty;
+        }
+
+        private void SetIssuerPropertiesFromMetadata(SecurityToken securityToken)
+        {
+            if (securityToken.Issuer.EndsWith("v2.0", StringComparison.OrdinalIgnoreCase))
+            {
+                if (AadIssuerV2 == null)
+                {
+                    IssuerMetadata issuerMetadata =
+                        CreateConfigManager(AadAuthority).GetConfigurationAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                    AadIssuerV2 = issuerMetadata.Issuer!;
+                }
+            }
+            else
+            {
+                if (AadIssuerV1 == null)
+                {
+                    IssuerMetadata issuerMetadata =
+                        CreateConfigManager(CreateV1Authority()).GetConfigurationAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                    AadIssuerV1 = issuerMetadata.Issuer!;
+                }
+            }
         }
     }
 }
