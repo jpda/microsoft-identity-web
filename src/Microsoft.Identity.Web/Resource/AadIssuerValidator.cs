@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
@@ -27,6 +28,7 @@ namespace Microsoft.Identity.Web.Resource
             AadIssuerValidatorOptions = aadIssuerValidatorOptions;
             HttpClientFactory = httpClientFactory;
             AadAuthority = aadAuthority.TrimEnd('/');
+            ValidIssuers = new List<string>();
         }
 
         private IOptions<AadIssuerValidatorOptions> AadIssuerValidatorOptions { get; }
@@ -34,6 +36,7 @@ namespace Microsoft.Identity.Web.Resource
         internal string? AadIssuerV1 { get; set; }
         internal string? AadIssuerV2 { get; set; }
         internal string AadAuthority { get; set; }
+        private List<string> ValidIssuers { get; set; }
 
         /// <summary>
         /// Validate the issuer for multi-tenant applications of various audiences (Work and School accounts, or Work and School accounts +
@@ -87,55 +90,56 @@ namespace Microsoft.Identity.Web.Resource
             // if neither is set, use metadata discovery
             // then plow through the new valid issuer list
 
-            SetIssuerPropertiesFromMetadata(securityToken);
-
-            bool userDefinedExplicitIssuers = false;
-
-            if (validationParameters.ValidIssuers != null)
+            if (!ValidIssuers.Any())
             {
-                var explicitIssuers = validationParameters.ValidIssuers.Where(x =>
-                               !string.Equals(x, AadIssuerV1 ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
-                               !string.Equals(x, AadIssuerV2 ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+                var candidateIssuers = new List<string>();
 
-                userDefinedExplicitIssuers = explicitIssuers != null && explicitIssuers.Any();
-
-                var validIssuers = userDefinedExplicitIssuers ? explicitIssuers.ToList() : validationParameters.ValidIssuers;
-
-                foreach (var validIssuerTemplate in validIssuers)
+                if (validationParameters.ValidIssuer != null)
                 {
-                    if (IsValidIssuer(validIssuerTemplate, tenantId, actualIssuer))
+                    candidateIssuers.Add(validationParameters.ValidIssuer);
+                }
+
+                // while a user can add these explicitly,
+                // this will likely be populated from metadata with the templated issuer
+                // just being populated is not an indicator of user-defined
+                if (validationParameters.ValidIssuers != null)
+                {
+                    candidateIssuers.AddRange(validationParameters.ValidIssuers);
+                }
+
+                // these come from metadata, so we'll add them to the candidate list too
+                // especially for webapps & apis, where the id_token will be v2 but the
+                // AccessTokenAcceptedVersion may still be v1
+                if (AadIssuerV1 == null || AadIssuerV2 == null)
+                {
+                    SetIssuerPropertiesFromMetadata(securityToken);
+                    if (AadIssuerV1 != null)
                     {
-                        return actualIssuer;
+                        candidateIssuers.Add(AadIssuerV1);
+                    }
+
+                    if (AadIssuerV2 != null)
+                    {
+                        candidateIssuers.Add(AadIssuerV2);
                     }
                 }
+
+                // find any non-metadata issuers
+                var explicitIssuers = candidateIssuers.Where(x =>
+                                 !string.Equals(x, AadIssuerV1 ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                                 !string.Equals(x, AadIssuerV2 ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+
+                bool userDefinedExplicitIssuers = explicitIssuers.Any();
+
+                ValidIssuers = userDefinedExplicitIssuers ? explicitIssuers.ToList() : candidateIssuers;
             }
 
-            if (validationParameters.ValidIssuer != null)
+            foreach (var validIssuerTemplate in ValidIssuers)
             {
-                userDefinedExplicitIssuers = true;
-                if (IsValidIssuer(validationParameters.ValidIssuer, tenantId, actualIssuer))
+                if (IsValidIssuer(validIssuerTemplate, tenantId, actualIssuer))
                 {
                     return actualIssuer;
                 }
-            }
-
-            try
-            {
-                if (!userDefinedExplicitIssuers)
-                {
-                    if (IsValidIssuer(AadIssuerV2, tenantId, actualIssuer))
-                    {
-                        return actualIssuer;
-                    }
-
-                    if (IsValidIssuer(AadIssuerV1, tenantId, actualIssuer))
-                    {
-                        return actualIssuer;
-                    }
-                }
-            }
-            catch
-            {
             }
 
             // If a valid issuer is not found, throw
