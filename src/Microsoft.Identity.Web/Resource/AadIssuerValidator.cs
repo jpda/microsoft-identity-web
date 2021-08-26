@@ -131,7 +131,7 @@ namespace Microsoft.Identity.Web.Resource
 
                 bool userDefinedExplicitIssuers = explicitIssuers.Any();
 
-                ValidIssuers = userDefinedExplicitIssuers ? explicitIssuers.ToList() : candidateIssuers;
+                ValidIssuers = userDefinedExplicitIssuers ? explicitIssuers.Distinct().ToList() : candidateIssuers.Distinct().ToList();
             }
 
             foreach (var validIssuerTemplate in ValidIssuers)
